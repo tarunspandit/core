@@ -81,6 +81,9 @@ class Light(LightEntity, ZHAEntity):
     def __init__(self, entity_data: EntityData) -> None:
         """Initialize the ZHA light."""
         super().__init__(entity_data)
+        self._entertainment_capable = self._check_entertainment_support()
+        self._entertainment_active = False
+        self._entertainment_group = None
         color_modes: set[ColorMode] = set()
         has_brightness = False
         for color_mode in self.entity_data.entity.supported_color_modes:
@@ -221,3 +224,71 @@ class Light(LightEntity, ZHAEntity):
             ),
             effect=state.attributes.get(ATTR_EFFECT),
         )
+
+    def _check_entertainment_support(self) -> bool:
+        """Check if this light supports Hue entertainment mode."""
+        try:
+            # Get device info
+            if hasattr(self.entity_data.entity, 'device'):
+                device = self.entity_data.entity.device
+                manufacturer = getattr(device, 'manufacturer', None)
+                model = getattr(device, 'model', None)
+                
+                # Hue bulbs that support entertainment
+                hue_entertainment_models = {
+                    "LCT001", "LCT002", "LCT003",  # Hue bulb A19
+                    "LCT010", "LCT011", "LCT012",  # Hue BR30  
+                    "LCT014", "LCT015", "LCT016",  # Hue A19 (Gen 3)
+                    "LCT021", "LCT024",             # Hue Go and Play
+                    "LTW010", "LTW011", "LTW012",  # Hue White Ambiance
+                    "LTW015", "LTW016", "LTW017",  # White Ambiance (Gen 3)
+                    "LLC010", "LLC011", "LLC012",  # Living Colors
+                    "LLC020", "LST002", "LST003",  # Light Strip Plus
+                    "LCX001", "LCX002", "LCX003",  # Gradient Strip
+                }
+                
+                if manufacturer and "Philips" in manufacturer:
+                    if model in hue_entertainment_models:
+                        return True
+            return False
+        except Exception:
+            return False
+
+    @property
+    def entertainment_capable(self) -> bool:
+        """Return if light supports entertainment mode."""
+        return self._entertainment_capable
+
+    async def async_entertainment_update(self, x: float, y: float, brightness: int) -> bool:
+        """Direct entertainment update bypassing normal light entity."""
+        if not self._entertainment_capable or not self._entertainment_active:
+            return False
+            
+        try:
+            # Send direct Zigbee command bypassing entity state
+            await self._send_direct_color_command(x, y, brightness)
+            return True
+        except Exception as e:
+            _LOGGER.error("Entertainment update failed for %s: %s", self.name, e)
+            return False
+
+    async def _send_direct_color_command(self, x: float, y: float, brightness: int):
+        """Send direct Zigbee color command for entertainment mode."""
+        try:
+            # This would interface with the actual Zigbee device
+            # through the ZHA framework, bypassing normal entity updates
+            if hasattr(self.entity_data.entity, 'async_set_color_xy'):
+                # Use fast path if available
+                await self.entity_data.entity.async_set_color_xy(
+                    x, y, brightness, transition_time=1
+                )
+            else:
+                # Fallback to standard turn_on with minimal transition
+                await self.entity_data.entity.async_turn_on(
+                    xy_color=(x, y),
+                    brightness=brightness,
+                    transition=0.1
+                )
+        except Exception as e:
+            _LOGGER.error("Direct color command failed: %s", e)
+            raise

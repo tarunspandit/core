@@ -466,7 +466,7 @@ async def websocket_get_device(
     if not (zha_device := zha_gateway_proxy.device_proxies.get(ieee)):
         connection.send_message(
             websocket_api.error_message(
-                msg[ID], websocket_api.ERR_NOT_FOUND, "ZHA Device not found"
+                msg[ATTR_ID], websocket_api.ERR_NOT_FOUND, "ZHA Device not found"
             )
         )
         return
@@ -493,7 +493,7 @@ async def websocket_get_group(
     if not (zha_group := zha_gateway_proxy.group_proxies.get(group_id)):
         connection.send_message(
             websocket_api.error_message(
-                msg[ID], websocket_api.ERR_NOT_FOUND, "ZHA Group not found"
+                msg[ATTR_ID], websocket_api.ERR_NOT_FOUND, "ZHA Group not found"
             )
         )
         return
@@ -577,7 +577,7 @@ async def websocket_add_group_members(
     if not (zha_group := zha_gateway.groups.get(group_id)):
         connection.send_message(
             websocket_api.error_message(
-                msg[ID], websocket_api.ERR_NOT_FOUND, "ZHA Group not found"
+                msg[ATTR_ID], websocket_api.ERR_NOT_FOUND, "ZHA Group not found"
             )
         )
         return
@@ -609,7 +609,7 @@ async def websocket_remove_group_members(
     if not (zha_group := zha_gateway.groups.get(group_id)):
         connection.send_message(
             websocket_api.error_message(
-                msg[ID], websocket_api.ERR_NOT_FOUND, "ZHA Group not found"
+                msg[ATTR_ID], websocket_api.ERR_NOT_FOUND, "ZHA Group not found"
             )
         )
         return
@@ -1589,6 +1589,9 @@ def async_load_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, websocket_create_network_backup)
     websocket_api.async_register_command(hass, websocket_restore_network_backup)
     websocket_api.async_register_command(hass, websocket_change_channel)
+    
+    # Register entertainment commands
+    register_entertainment_commands(hass)
 
 
 @callback
@@ -1601,3 +1604,184 @@ def async_unload_api(hass: HomeAssistant) -> None:
     hass.services.async_remove(DOMAIN, SERVICE_ISSUE_ZIGBEE_GROUP_COMMAND)
     hass.services.async_remove(DOMAIN, SERVICE_WARNING_DEVICE_SQUAWK)
     hass.services.async_remove(DOMAIN, SERVICE_WARNING_DEVICE_WARN)
+
+
+# Entertainment Mode WebSocket Commands
+
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "zha/entertainment/create_group",
+        vol.Required("group_id"): str,
+        vol.Required("lights"): [str],
+    }
+)
+@callback
+def websocket_create_entertainment_group(
+    hass: HomeAssistant,
+    connection: websocket_api.connection.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Create ZHA entertainment group."""
+    zha_gateway = get_zha_data(hass).gateway
+    
+    # Get entertainment manager
+    if not hasattr(zha_gateway, 'entertainment_manager'):
+        from .entertainment import ZHAEntertainmentManager
+        zha_gateway.entertainment_manager = ZHAEntertainmentManager(hass, zha_gateway)
+    
+    manager = zha_gateway.entertainment_manager
+    group = manager.async_create_group(msg["group_id"])
+    
+    # Add lights to group
+    light_entities = []
+    for entity_id in msg["lights"]:
+        entity = hass.states.get(entity_id)
+        if entity and entity.domain == "light":
+            # Get the actual ZHA light entity
+            entity_registry = er.async_get(hass)
+            entry = entity_registry.async_get(entity_id)
+            if entry and entry.platform == "zha":
+                # Get the actual light entity object
+                light = hass.data["light"].get_entity(entity_id)
+                if light and hasattr(light, 'entertainment_capable') and light.entertainment_capable:
+                    group.add_light(light)
+                    light_entities.append(entity_id)
+    
+    if light_entities:
+        connection.send_result(
+            msg[ATTR_ID],
+            {
+                "status": "success",
+                "group_id": msg["group_id"],
+                "lights": light_entities
+            }
+        )
+    else:
+        connection.send_error(
+            msg[ATTR_ID],
+            "no_entertainment_lights",
+            "No entertainment capable lights found"
+        )
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "zha/entertainment/start_stream",
+        vol.Required("group_id"): str,
+    }
+)
+@callback
+def websocket_start_entertainment_stream(
+    hass: HomeAssistant,
+    connection: websocket_api.connection.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Start ZHA entertainment streaming."""
+    
+    async def start_stream():
+        zha_gateway = get_zha_data(hass).gateway
+        
+        if not hasattr(zha_gateway, 'entertainment_manager'):
+            connection.send_error(
+                msg[ATTR_ID],
+                "no_manager",
+                "Entertainment manager not initialized"
+            )
+            return
+            
+        success = await zha_gateway.entertainment_manager.async_start_streaming(msg["group_id"])
+        
+        if success:
+            connection.send_result(msg[ID], {"status": "streaming"})
+        else:
+            connection.send_error(
+                msg[ATTR_ID],
+                "stream_failed",
+                "Failed to start entertainment stream"
+            )
+    
+    hass.async_create_task(start_stream())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "zha/entertainment/stop_stream",
+        vol.Required("group_id"): str,
+    }
+)
+@callback
+def websocket_stop_entertainment_stream(
+    hass: HomeAssistant,
+    connection: websocket_api.connection.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Stop ZHA entertainment streaming."""
+    
+    async def stop_stream():
+        zha_gateway = get_zha_data(hass).gateway
+        
+        if not hasattr(zha_gateway, 'entertainment_manager'):
+            connection.send_error(
+                msg[ATTR_ID],
+                "no_manager",
+                "Entertainment manager not initialized"
+            )
+            return
+            
+        success = await zha_gateway.entertainment_manager.async_stop_streaming(msg["group_id"])
+        
+        if success:
+            connection.send_result(msg[ID], {"status": "stopped"})
+        else:
+            connection.send_error(
+                msg[ATTR_ID],
+                "stop_failed",
+                "Failed to stop entertainment stream"
+            )
+    
+    hass.async_create_task(stop_stream())
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required(TYPE): "zha/entertainment/update_colors",
+        vol.Required("group_id"): str,
+        vol.Required("colors"): dict,
+    }
+)
+@callback
+def websocket_update_entertainment_colors(
+    hass: HomeAssistant,
+    connection: websocket_api.connection.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Update entertainment colors."""
+    
+    async def update_colors():
+        zha_gateway = get_zha_data(hass).gateway
+        
+        if not hasattr(zha_gateway, 'entertainment_manager'):
+            connection.send_error(
+                msg[ATTR_ID],
+                "no_manager",
+                "Entertainment manager not initialized"
+            )
+            return
+            
+        success = await zha_gateway.entertainment_manager.async_update_colors(
+            msg["group_id"],
+            msg["colors"]
+        )
+        
+        connection.send_result(msg[ID], {"success": success})
+    
+    hass.async_create_task(update_colors())
+
+
+# Register entertainment commands
+def register_entertainment_commands(hass: HomeAssistant) -> None:
+    """Register entertainment WebSocket commands."""
+    websocket_api.async_register_command(hass, websocket_create_entertainment_group)
+    websocket_api.async_register_command(hass, websocket_start_entertainment_stream)
+    websocket_api.async_register_command(hass, websocket_stop_entertainment_stream)
+    websocket_api.async_register_command(hass, websocket_update_entertainment_colors)
