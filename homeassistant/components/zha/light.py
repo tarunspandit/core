@@ -228,17 +228,12 @@ class Light(LightEntity, ZHAEntity):
     def _check_entertainment_support(self) -> bool:
         """Check if this light supports Hue entertainment mode."""
         try:
-            # Get device info - try different ways to access it
-            device = None
-            if hasattr(self, 'entity_data') and hasattr(self.entity_data, 'device'):
-                device = self.entity_data.device
-            elif hasattr(self, 'entity_data') and hasattr(self.entity_data, 'entity'):
-                if hasattr(self.entity_data.entity, 'device'):
-                    device = self.entity_data.entity.device
-            
-            if device:
-                manufacturer = getattr(device, 'manufacturer', None)
-                model = getattr(device, 'model', None)
+            # Get device info from device_proxy
+            if hasattr(self.entity_data, 'device_proxy'):
+                device_proxy = self.entity_data.device_proxy
+                device_info = device_proxy.device.device_info
+                manufacturer = device_info.get('manufacturer', None)
+                model = device_info.get('model', None)
                 
                 # Hue bulbs that support entertainment
                 hue_entertainment_models = {
