@@ -228,9 +228,15 @@ class Light(LightEntity, ZHAEntity):
     def _check_entertainment_support(self) -> bool:
         """Check if this light supports Hue entertainment mode."""
         try:
-            # Get device info
-            if hasattr(self.entity_data.entity, 'device'):
-                device = self.entity_data.entity.device
+            # Get device info - try different ways to access it
+            device = None
+            if hasattr(self, 'entity_data') and hasattr(self.entity_data, 'device'):
+                device = self.entity_data.device
+            elif hasattr(self, 'entity_data') and hasattr(self.entity_data, 'entity'):
+                if hasattr(self.entity_data.entity, 'device'):
+                    device = self.entity_data.entity.device
+            
+            if device:
                 manufacturer = getattr(device, 'manufacturer', None)
                 model = getattr(device, 'model', None)
                 
@@ -275,20 +281,13 @@ class Light(LightEntity, ZHAEntity):
     async def _send_direct_color_command(self, x: float, y: float, brightness: int):
         """Send direct Zigbee color command for entertainment mode."""
         try:
-            # This would interface with the actual Zigbee device
-            # through the ZHA framework, bypassing normal entity updates
-            if hasattr(self.entity_data.entity, 'async_set_color_xy'):
-                # Use fast path if available
-                await self.entity_data.entity.async_set_color_xy(
-                    x, y, brightness, transition_time=1
-                )
-            else:
-                # Fallback to standard turn_on with minimal transition
-                await self.entity_data.entity.async_turn_on(
-                    xy_color=(x, y),
-                    brightness=brightness,
-                    transition=0.1
-                )
+            # For now, just use the standard turn_on method
+            # This is safer and won't break ZHA initialization
+            await self.async_turn_on(
+                xy_color=(x, y),
+                brightness=brightness,
+                transition=0.1
+            )
         except Exception as e:
             _LOGGER.error("Direct color command failed: %s", e)
-            raise
+            # Don't raise - just log the error
